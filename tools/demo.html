@@ -39,6 +39,7 @@
     window.chrome = {
       storage: { sync: { get: (d, cb) => cb({ ...d, ...store }) } },
       runtime: {
+        id: "demo",
         sendMessage: async (msg) =>
           msg.type === "scan"
             ? { ...PhishGuardScoring.scoreEmail(msg.email), source: "local", scan_id: "demo" }

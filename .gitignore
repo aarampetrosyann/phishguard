@@ -4,3 +4,4 @@ __pycache__/
 backend/.aws-sam/
 samconfig.toml
 .DS_Store
+.claude/

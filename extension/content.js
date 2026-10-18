@@ -10,6 +10,11 @@
     subject: "h2.hP",        // thread subject
   };
   const SCANNED = "data-phishguard";
+  const log = (...args) => console.log("[PhishGuard]", ...args);
+
+  // After the extension is reloaded, scripts left in already-open tabs lose
+  // access to chrome.* APIs. Detect that instead of throwing on every DOM change.
+  const contextAlive = () => Boolean(chrome.runtime?.id);
 
   function extractEmail(bodyEl) {
     const message = bodyEl.closest(SEL.message) || document;
@@ -87,21 +92,34 @@
   async function scanBody(bodyEl) {
     if (bodyEl.hasAttribute(SCANNED)) return;
     bodyEl.setAttribute(SCANNED, "pending");
+    const email = extractEmail(bodyEl);
+    let result;
     try {
-      const result = await chrome.runtime.sendMessage({ type: "scan", email: extractEmail(bodyEl) });
+      result = await chrome.runtime.sendMessage({ type: "scan", email });
       if (!result || result.error) throw new Error(result?.error || "no response");
+    } catch (err) {
+      // Background worker unreachable: score in the page so the user still gets a verdict.
+      console.warn("[PhishGuard] background unavailable, scoring locally:", err.message);
+      result = { ...PhishGuardScoring.scoreEmail(email), source: "local" };
+    }
+    try {
       bodyEl.setAttribute(SCANNED, result.verdict);
       renderBanner(bodyEl, result);
       markLinks(bodyEl, result);
+      log(`${result.verdict} (${result.score}/100), ${email.links.length} links, sender ${email.sender || "unknown"}`);
     } catch (err) {
-      console.warn("PhishGuard scan failed:", err);
-      bodyEl.removeAttribute(SCANNED);
+      console.error("[PhishGuard] failed to render banner:", err);
     }
   }
 
   let queued = false;
   function scanVisible() {
     queued = false;
+    if (!contextAlive()) {
+      observer.disconnect();
+      log("extension was reloaded; refresh this Gmail tab to re-enable scanning");
+      return;
+    }
     chrome.storage.sync.get({ enabled: true }, ({ enabled }) => {
       if (!enabled) return;
       document.querySelectorAll(`${SEL.body}:not([${SCANNED}])`).forEach(scanBody);
@@ -109,11 +127,13 @@
   }
 
   // Gmail is a SPA: re-check whenever the DOM changes, debounced.
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     if (!queued) {
       queued = true;
       setTimeout(scanVisible, 400);
     }
-  }).observe(document.body, { childList: true, subtree: true });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  log("content script loaded");
   scanVisible();
 })();
