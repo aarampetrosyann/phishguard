@@ -82,82 +82,116 @@
     return tokens.includes(brand);
   }
 
+  // Returns ["mentions" | "typo", brand] if the domain imitates a known brand, else null.
+  // Edit-distance matching only applies to longer brand names so 'apply' isn't 'apple'.
+  function brandLookalike(host, reg) {
+    const mentioned = Object.keys(BRANDS).find((b) => mentionsBrand(host, b) && !isOfficial(reg, b));
+    if (mentioned) return ["mentions", mentioned];
+    for (const token of reg.split(".")[0].split("-")) {
+      const normalized = token.replace(/[0135@$]/g, (c) => HOMOGLYPHS[c]);
+      for (const brand of Object.keys(BRANDS)) {
+        if (brand.length < 4 || isOfficial(reg, brand)) continue;
+        const maxEdits = brand.length >= 9 ? 2 : brand.length >= 6 ? 1 : 0;
+        if ((normalized === brand && token !== brand) ||
+            (maxEdits && token.length >= 5 && (() => { const d = levenshtein(token, brand); return d > 0 && d <= maxEdits; })())) {
+          return ["typo", brand];
+        }
+      }
+    }
+    return null;
+  }
+
+  const isBrandDomain = (domain) => Object.values(BRANDS).some((domains) => domains.includes(domain));
+
   function verdictFor(score) {
     if (score >= 50) return "phishing";
     if (score >= 30) return "suspicious";
     return "safe";
   }
 
+  // "Phishing" needs at least two independent strong signals; one alone tops out at suspicious.
+  function applyStrongCap(score, strong, reasons) {
+    if (score >= 50 && strong.size < 2) {
+      reasons.push("Only one strong warning sign, so rated suspicious rather than phishing");
+      return 49;
+    }
+    return score;
+  }
+
   function scoreUrl(url, displayText = "", senderDomain = "") {
     const reasons = [];
+    const strong = new Set();
     let score = 0;
-    const hit = (points, reason) => { score += points; reasons.push(reason); };
+    const hit = (points, reason, strongId) => {
+      score += points;
+      reasons.push(reason);
+      if (strongId) strong.add(strongId);
+    };
+    const empty = { url, domain: "", score: 0, verdict: "safe", reasons: [], strong: [] };
 
     let parsed;
     try {
       parsed = new URL(url.includes("://") ? url : "http://" + url);
     } catch {
-      return { url, domain: "", score: 0, verdict: "safe", reasons: [] };
+      return empty;
     }
     // URL() punycode-encodes unicode hosts, which is what we want for the xn-- check.
     const host = parsed.hostname.toLowerCase();
-    if (!host) return { url, domain: "", score: 0, verdict: "safe", reasons: [] };
+    if (!host) return empty;
 
     const reg = registeredDomain(host);
-    const regLabel = reg.split(".")[0];
     const tld = host.split(".").pop();
+    // Links to the sender's own domain (incl. tracking subdomains) are expected in legitimate
+    // mail, so weak signals and text mismatches are ignored for them.
+    const ownDomain = Boolean(senderDomain) && reg === registeredDomain(senderDomain);
 
-    if (isIp(host)) hit(35, "Link points to a raw IP address instead of a domain");
-    if (host.includes("xn--")) hit(30, "Domain uses punycode (possible lookalike characters)");
-    if (parsed.username || parsed.password) hit(30, "URL contains '@', which hides the real destination");
-    if (SUSPICIOUS_TLDS.has(tld)) hit(15, `Uses a TLD often abused for phishing (.${tld})`);
+    if (isIp(host)) hit(35, "Link points to a raw IP address instead of a domain", "ip");
+    if (host.includes("xn--")) hit(30, "Domain uses punycode (possible lookalike characters)", "punycode");
+    if (parsed.username || parsed.password) hit(30, "URL contains '@', which hides the real destination", "at_sign");
+    if (SUSPICIOUS_TLDS.has(tld)) hit(15, `Uses a TLD often abused for phishing (.${tld})`, "bad_tld");
     if (URL_SHORTENERS.has(reg)) hit(15, "Shortened link hides the real destination");
-    if (parsed.protocol === "http:") hit(10, "Link is not encrypted (http)");
+    if (parsed.protocol === "http:" && !ownDomain) hit(10, "Link is not encrypted (http)");
     if ((host.match(/\./g) || []).length >= 4) hit(15, "Unusually many subdomains");
-    if (url.length > 100) hit(5, "Very long URL");
+    if (url.length > 100 && !ownDomain) hit(5, "Very long URL");
     if ((host.match(/-/g) || []).length >= 3) hit(10, "Many hyphens in domain");
 
-    const impersonated = Object.keys(BRANDS).find((b) => mentionsBrand(host, b) && !isOfficial(reg, b));
-    if (impersonated) {
-      hit(40, `Mentions '${impersonated}' but isn't an official ${impersonated} domain`);
-    } else {
-      const normalized = regLabel.replace(/[0135@$]/g, (c) => HOMOGLYPHS[c]);
-      for (const brand of Object.keys(BRANDS)) {
-        if (isOfficial(reg, brand) || brand.length < 4) continue;
-        const d = levenshtein(regLabel, brand);
-        if (normalized === brand || (d > 0 && d <= (brand.length < 6 ? 1 : 2))) {
-          hit(40, `Domain looks like a misspelling of '${brand}'`);
-          break;
-        }
-      }
+    const lookalike = brandLookalike(host, reg);
+    if (lookalike?.[0] === "mentions") {
+      hit(40, `Mentions '${lookalike[1]}' but isn't an official ${lookalike[1]} domain`, "brand");
+    } else if (lookalike) {
+      hit(40, `Domain looks like a misspelling of '${lookalike[1]}'`, "brand");
     }
 
     const hostTokens = host.split(/[.\-]/);
     const hostWords = PATH_KEYWORDS.filter((k) => hostTokens.includes(k)).sort();
-    if (hostWords.length) hit(10, "Sensitive keywords in domain: " + hostWords.join(", "));
+    if (hostWords.length) hit(10, "Sensitive keywords in domain: " + hostWords.join(", "), "host_keywords");
 
     const path = (parsed.pathname + "?" + parsed.search.replace(/^\?/, "")).toLowerCase();
     const found = PATH_KEYWORDS.filter((k) => path.includes(k)).sort();
-    if (found.length) hit(Math.min(5 * found.length, 15), "Sensitive keywords in path: " + found.join(", "));
+    if (found.length && !ownDomain) hit(Math.min(5 * found.length, 15), "Sensitive keywords in path: " + found.join(", "));
 
+    // Anchor text shows one domain but href goes elsewhere. Ignored when the link goes to the
+    // sender's own domain, unless the text shows a well-known brand the sender isn't.
     const shown = (displayText || "").toLowerCase().match(/([a-z0-9-]+\.)+[a-z]{2,}/);
     if (shown) {
       const shownReg = registeredDomain(shown[0]);
-      if (shownReg !== reg && shownReg.includes(".")) hit(40, `Link text shows '${shownReg}' but goes to '${reg}'`);
+      if (shownReg !== reg && shownReg.includes(".") && (!ownDomain || isBrandDomain(shownReg))) {
+        hit(40, `Link text shows '${shownReg}' but goes to '${reg}'`, "text_mismatch");
+      }
     }
 
-    if (senderDomain && reg !== registeredDomain(senderDomain)) {
+    if (senderDomain && !ownDomain) {
       const senderReg = registeredDomain(senderDomain);
       for (const [brand, domains] of Object.entries(BRANDS)) {
         if (domains.includes(senderReg) && mentionsBrand(host, brand)) {
-          hit(20, "Link claims to be the sender's brand but uses a different domain");
+          hit(20, "Link claims to be the sender's brand but uses a different domain", "sender_brand_link");
           break;
         }
       }
     }
 
-    score = Math.min(score, 100);
-    return { url, domain: reg, score, verdict: verdictFor(score), reasons };
+    score = applyStrongCap(Math.min(score, 100), strong, reasons);
+    return { url, domain: reg, score, verdict: verdictFor(score), reasons, strong: [...strong].sort() };
   }
 
   function scoreEmail({ links = [], sender = "", subject = "", bodyText = "" }) {
@@ -172,24 +206,28 @@
     }
 
     const reasons = [];
+    const strong = new Set();
     const text = `${subject}\n${bodyText}`.toLowerCase();
     const urgency = URGENCY_PHRASES.filter((p) => text.includes(p));
     let contentScore = Math.min(10 * urgency.length, 30);
     if (urgency.length) reasons.push("Urgent/pressure language: " + urgency.slice(0, 4).map((p) => `"${p}"`).join(", "));
+    if (urgency.length >= 2) strong.add("urgency"); // one phrase like "limited time" is normal in marketing
 
     if (senderDomain) {
-      const brand = Object.keys(BRANDS).find(
-        (b) => mentionsBrand(senderDomain, b) && !isOfficial(registeredDomain(senderDomain), b)
-      );
-      if (brand) {
+      const lookalike = brandLookalike(senderDomain, registeredDomain(senderDomain));
+      if (lookalike) {
         contentScore += 30;
-        reasons.push(`Sender domain impersonates '${brand}'`);
+        strong.add("sender_impersonation");
+        const kind = lookalike[0] === "mentions" ? "impersonates" : "looks like a misspelling of";
+        reasons.push(`Sender domain ${kind} '${lookalike[1]}'`);
       }
     }
 
     const worst = linkResults.reduce((m, r) => Math.max(m, r.score), 0);
-    const flagged = linkResults.filter((r) => r.verdict !== "safe").length;
-    const score = Math.min(worst + contentScore + Math.max(flagged - 1, 0) * 5, 100);
+    const flagged = linkResults.filter((r) => r.verdict !== "safe");
+    flagged.forEach((r) => r.strong.forEach((id) => strong.add(id)));
+    let score = Math.min(worst + contentScore + Math.max(flagged.length - 1, 0) * 5, 100);
+    score = applyStrongCap(score, strong, reasons);
 
     return { score, verdict: verdictFor(score), reasons, links: linkResults, sender_domain: senderDomain };
   }

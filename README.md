@@ -31,27 +31,42 @@ Gmail tab ──content.js──▶ background.js ──POST /score──▶ API
 
 ## Scoring rules
 
-Each URL gets points for each rule it trips (capped at 100):
+Each URL gets points for each rule it trips (capped at 100). Rules marked **strong**
+are independent warning signs; the rest only add points.
 
-| Signal | Points |
-|---|---|
-| Domain is a typo of a known brand (`paypa1.com`, `micros0ft.com`) | 40 |
-| Brand name in the domain, but not the brand's real domain (`paypal-secure-login.com`) | 40 |
-| Link text shows one domain, href goes to another | 40 |
-| Raw IP address | 35 |
-| Punycode (`xn--`) lookalike characters | 30 |
-| `@` in the URL (`https://google.com@evil.com`) | 30 |
-| Link uses the sender's brand name but a different domain | 20 |
-| Abused TLD (`.xyz`, `.top`, `.zip`…), URL shortener, 4+ subdomains | 15 each |
-| Plain `http`, 3+ hyphens, sensitive words in the domain | 10 each |
-| Sensitive words in the path (`login`, `verify`, `account`…) | 5 each, max 15 |
-| URL over 100 characters | 5 |
+| Signal | Points | Strong |
+|---|---|---|
+| Domain is a misspelling of a known brand (`paypa1.com`, `amaz0n-login.top`) | 40 | ✓ |
+| Brand name in the domain, but not the brand's real domain (`paypal-secure-login.com`) | 40 | ✓ |
+| Link text shows one domain, href goes to another | 40 | ✓ |
+| Raw IP address | 35 | ✓ |
+| Punycode (`xn--`) lookalike characters | 30 | ✓ |
+| `@` in the URL (`https://google.com@evil.com`) | 30 | ✓ |
+| Link uses the sender's brand name but a different domain | 20 | ✓ |
+| Abused TLD (`.xyz`, `.top`, `.zip`…) | 15 | ✓ |
+| URL shortener, 4+ subdomains | 15 each | |
+| Sensitive words in the domain (`secure-login.…`) | 10 | ✓ |
+| Plain `http`, 3+ hyphens | 10 each | |
+| Sensitive words in the path (`login`, `verify`, `account`…) | 5 each, max 15 | |
+| URL over 100 characters | 5 | |
+
+**Links to the sender's own domain** (including tracking subdomains like
+`click.email.brand.com`) skip the `http`, long-URL, path-keyword and link-text checks:
+marketing mail is full of these, and they lead where the sender says they do. The
+link-text check still applies if the text shows a well-known brand (a link reading
+`chase.com` from `secure-alerts.net` is still flagged).
 
 The email score = the worst link's score + urgency phrases ("verify your account",
-"within 24 hours"…, 10 each, max 30) + 30 if the sender's domain impersonates a brand
-+ 5 for each extra flagged link.
+"within 24 hours"…, 10 each, max 30) + 30 if the sender's domain imitates a brand
++ 5 for each extra flagged link. Two or more urgency phrases and a brand-imitating
+sender each count as strong signals.
 
-**Verdicts:** `safe` < 30 ≤ `suspicious` < 50 ≤ `phishing`
+**Verdicts:** `safe` < 30 ≤ `suspicious` < 50 ≤ `phishing`. A `phishing` verdict needs
+at least **two different strong signals**; with only one, the score is capped at 49.
+
+**Trusted senders:** the banner's "Trust <domain>" button adds the sender's domain to
+an allowlist (synced via Chrome) and future mail from it is skipped. The button is
+hidden when the sender's domain itself imitates a brand.
 
 ## Run the tests
 

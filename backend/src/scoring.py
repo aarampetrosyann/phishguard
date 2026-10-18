@@ -105,6 +105,34 @@ def _mentions_brand(host: str, brand: str) -> bool:
     return brand in tokens
 
 
+def _brand_lookalike(host: str, reg: str):
+    """Return ("mentions" | "typo", brand) if the domain imitates a known brand, else None.
+
+    "mentions": the brand name appears in a domain the brand doesn't own (paypal-login.com).
+    "typo": a hyphen-separated part of the registered name is a misspelling of a brand
+    (paypa1.com, amaz0n-login.top). Edit-distance matching only applies to longer brand
+    names, so short real words like 'apply' aren't mistaken for 'apple'.
+    """
+    for brand in BRANDS:
+        if _mentions_brand(host, brand) and not _is_official(reg, brand):
+            return "mentions", brand
+    for token in reg.split(".")[0].split("-"):
+        normalized = token.translate(HOMOGLYPHS)
+        for brand in BRANDS:
+            if len(brand) < 4 or _is_official(reg, brand):
+                continue
+            max_edits = 2 if len(brand) >= 9 else 1 if len(brand) >= 6 else 0
+            if (normalized == brand and token != brand) or (
+                max_edits and len(token) >= 5 and 0 < _levenshtein(token, brand) <= max_edits
+            ):
+                return "typo", brand
+    return None
+
+
+def _is_brand_domain(domain: str) -> bool:
+    return any(domain in domains for domains in BRANDS.values())
+
+
 def verdict_for(score: int) -> str:
     if score >= 50:
         return "phishing"
@@ -113,83 +141,99 @@ def verdict_for(score: int) -> str:
     return "safe"
 
 
+def _apply_strong_cap(score: int, strong: set, reasons: list) -> int:
+    """'Phishing' needs at least two independent strong signals; one alone tops out at suspicious."""
+    if score >= 50 and len(strong) < 2:
+        reasons.append("Only one strong warning sign, so rated suspicious rather than phishing")
+        return 49
+    return score
+
+
 def score_url(url: str, display_text: str = "", sender_domain: str = "") -> dict:
-    """Score a single URL. Returns {url, domain, score, verdict, reasons}."""
+    """Score a single URL. Returns {url, domain, score, verdict, reasons, strong}.
+
+    `strong` lists the IDs of strong signals found; weak signals (http, long URL,
+    path keywords...) only add points.
+    """
     reasons = []
+    strong = set()
     score = 0
 
-    def hit(points, reason):
+    def hit(points, reason, strong_id=None):
         nonlocal score
         score += points
         reasons.append(reason)
+        if strong_id:
+            strong.add(strong_id)
 
     parsed = urlparse(url if "://" in url else "http://" + url)
     host = (parsed.hostname or "").lower()
     if not host:
-        return {"url": url, "domain": "", "score": 0, "verdict": "safe", "reasons": []}
+        return {"url": url, "domain": "", "score": 0, "verdict": "safe", "reasons": [], "strong": []}
 
     reg = registered_domain(host)
-    reg_label = reg.split(".")[0]
     tld = host.rsplit(".", 1)[-1]
+    # Links to the sender's own domain (incl. tracking subdomains like click.email.brand.com)
+    # are expected in legitimate mail, so weak signals and text mismatches are ignored for them.
+    own_domain = bool(sender_domain) and reg == registered_domain(sender_domain)
 
     if _is_ip(host):
-        hit(35, "Link points to a raw IP address instead of a domain")
+        hit(35, "Link points to a raw IP address instead of a domain", "ip")
     if "xn--" in host:
-        hit(30, "Domain uses punycode (possible lookalike characters)")
+        hit(30, "Domain uses punycode (possible lookalike characters)", "punycode")
     if "@" in parsed.netloc:
-        hit(30, "URL contains '@', which hides the real destination")
+        hit(30, "URL contains '@', which hides the real destination", "at_sign")
     if tld in SUSPICIOUS_TLDS:
-        hit(15, f"Uses a TLD often abused for phishing (.{tld})")
+        hit(15, f"Uses a TLD often abused for phishing (.{tld})", "bad_tld")
     if reg in URL_SHORTENERS:
         hit(15, "Shortened link hides the real destination")
-    if parsed.scheme == "http":
+    if parsed.scheme == "http" and not own_domain:
         hit(10, "Link is not encrypted (http)")
     if host.count(".") >= 4:
         hit(15, "Unusually many subdomains")
-    if len(url) > 100:
+    if len(url) > 100 and not own_domain:
         hit(5, "Very long URL")
     if host.count("-") >= 3:
         hit(10, "Many hyphens in domain")
 
-    # Brand impersonation: brand name appears in host but domain isn't the brand's.
-    for brand in BRANDS:
-        if _mentions_brand(host, brand) and not _is_official(reg, brand):
-            hit(40, f"Mentions '{brand}' but isn't an official {brand} domain")
-            break
-    else:
-        # Typosquatting: registered label is 1-2 edits from a brand, or matches after homoglyph swap.
-        normalized = reg_label.translate(HOMOGLYPHS)
-        for brand in BRANDS:
-            if _is_official(reg, brand) or len(brand) < 4:
-                continue
-            if normalized == brand or 0 < _levenshtein(reg_label, brand) <= (1 if len(brand) < 6 else 2):
-                hit(40, f"Domain looks like a misspelling of '{brand}'")
-                break
+    lookalike = _brand_lookalike(host, reg)
+    if lookalike and lookalike[0] == "mentions":
+        hit(40, f"Mentions '{lookalike[1]}' but isn't an official {lookalike[1]} domain", "brand")
+    elif lookalike:
+        hit(40, f"Domain looks like a misspelling of '{lookalike[1]}'", "brand")
 
     host_words = sorted(k for k in PATH_KEYWORDS if k in re.split(r"[.\-]", host))
     if host_words:
-        hit(10, "Sensitive keywords in domain: " + ", ".join(host_words))
+        hit(10, "Sensitive keywords in domain: " + ", ".join(host_words), "host_keywords")
 
     path = (parsed.path + "?" + parsed.query).lower()
     found = sorted(k for k in PATH_KEYWORDS if k in path)
-    if found:
+    if found and not own_domain:
         hit(min(5 * len(found), 15), "Sensitive keywords in path: " + ", ".join(found))
 
-    # Anchor text shows one domain but href goes elsewhere.
+    # Anchor text shows one domain but href goes elsewhere. Ignored when the link goes to the
+    # sender's own domain, unless the text shows a well-known brand the sender isn't.
     shown = re.search(r"([a-z0-9-]+\.)+[a-z]{2,}", (display_text or "").lower())
     if shown:
         shown_reg = registered_domain(shown.group(0))
-        if shown_reg != reg and "." in shown_reg:
-            hit(40, f"Link text shows '{shown_reg}' but goes to '{reg}'")
+        if shown_reg != reg and "." in shown_reg and (not own_domain or _is_brand_domain(shown_reg)):
+            hit(40, f"Link text shows '{shown_reg}' but goes to '{reg}'", "text_mismatch")
 
-    if sender_domain and reg != registered_domain(sender_domain):
+    if sender_domain and not own_domain:
         for brand, domains in BRANDS.items():
             if registered_domain(sender_domain) in domains and _mentions_brand(host, brand):
-                hit(20, "Link claims to be the sender's brand but uses a different domain")
+                hit(20, "Link claims to be the sender's brand but uses a different domain", "sender_brand_link")
                 break
 
-    score = min(score, 100)
-    return {"url": url, "domain": reg, "score": score, "verdict": verdict_for(score), "reasons": reasons}
+    score = _apply_strong_cap(min(score, 100), strong, reasons)
+    return {
+        "url": url,
+        "domain": reg,
+        "score": score,
+        "verdict": verdict_for(score),
+        "reasons": reasons,
+        "strong": sorted(strong),
+    }
 
 
 def score_email(links: list, sender: str = "", subject: str = "", body_text: str = "") -> dict:
@@ -208,25 +252,30 @@ def score_email(links: list, sender: str = "", subject: str = "", body_text: str
         link_results.append(score_url(href, link.get("text", ""), sender_domain))
 
     reasons = []
+    strong = set()
     text = f"{subject}\n{body_text}".lower()
     urgency = [p for p in URGENCY_PHRASES if p in text]
     content_score = min(10 * len(urgency), 30)
     if urgency:
         reasons.append("Urgent/pressure language: " + ", ".join(f'"{p}"' for p in urgency[:4]))
+    if len(urgency) >= 2:  # one phrase like "limited time" is normal in marketing mail
+        strong.add("urgency")
 
     if sender_domain:
-        for brand in BRANDS:
-            if _mentions_brand(sender_domain, brand) and not _is_official(
-                registered_domain(sender_domain), brand
-            ):
-                content_score += 30
-                reasons.append(f"Sender domain impersonates '{brand}'")
-                break
+        lookalike = _brand_lookalike(sender_domain, registered_domain(sender_domain))
+        if lookalike:
+            content_score += 30
+            strong.add("sender_impersonation")
+            kind = "impersonates" if lookalike[0] == "mentions" else "looks like a misspelling of"
+            reasons.append(f"Sender domain {kind} '{lookalike[1]}'")
 
     worst = max((r["score"] for r in link_results), default=0)
-    flagged = sum(1 for r in link_results if r["verdict"] != "safe")
+    flagged = [r for r in link_results if r["verdict"] != "safe"]
+    for r in flagged:
+        strong.update(r["strong"])
     # Worst link dominates; content and multiple bad links add on top.
-    score = min(worst + content_score + max(flagged - 1, 0) * 5, 100)
+    score = min(worst + content_score + max(len(flagged) - 1, 0) * 5, 100)
+    score = _apply_strong_cap(score, strong, reasons)
 
     return {
         "score": score,

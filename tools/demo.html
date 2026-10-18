@@ -33,11 +33,25 @@
     </div>
   </div>
 
+  <div class="adn">
+    <div class="meta">From: <span class="gD" email="deals@coupon-hub.com">Coupon Hub</span></div>
+    <div class="a3s">
+      <p>Today's deals are here.</p>
+      <p><a href="https://bit.ly/3xYz">www.amazon.com/deals</a></p>
+    </div>
+  </div>
+
   <script src="../extension/scoring.js"></script>
   <script>
     const store = { enabled: true };
     window.chrome = {
-      storage: { sync: { get: (d, cb) => cb({ ...d, ...store }) } },
+      // Mimics chrome.storage.sync: callback style and promise style.
+      storage: {
+        sync: {
+          get: (d, cb) => { const v = { ...d, ...store }; return cb ? cb(v) : Promise.resolve(v); },
+          set: async (v) => Object.assign(store, v),
+        },
+      },
       runtime: {
         id: "demo",
         sendMessage: async (msg) =>
