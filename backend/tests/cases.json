@@ -1,0 +1,17 @@
+[
+  {"url": "https://www.paypal.com/signin", "expect": "safe"},
+  {"url": "https://mail.google.com/mail/u/0/", "expect": "safe"},
+  {"url": "https://github.com/anthropics", "expect": "safe"},
+  {"url": "https://www.purchase-orders.com/invoice", "expect": "safe"},
+  {"url": "https://first.com/about", "expect": "safe"},
+  {"url": "https://www.amazon.co.uk/orders", "expect": "safe"},
+  {"url": "http://192.168.4.20/login/verify", "expect": "phishing"},
+  {"url": "https://paypal-secure-login.com/account/verify", "expect": "phishing"},
+  {"url": "https://paypa1.com/signin", "expect": "suspicious+"},
+  {"url": "https://micros0ft.com/password", "expect": "suspicious+"},
+  {"url": "https://bit.ly/3xYz", "expect": "safe"},
+  {"url": "http://secure.account.update.login.example.xyz/confirm", "expect": "phishing"},
+  {"url": "https://xn--pple-43d.com/", "expect": "suspicious+"},
+  {"url": "https://apple.com.verify-id.top/unlock", "expect": "phishing"},
+  {"url": "https://evil.example/", "text": "https://www.chase.com/login", "expect": "suspicious+"}
+]

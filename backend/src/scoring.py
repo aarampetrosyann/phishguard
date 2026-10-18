@@ -1,0 +1,237 @@
+"""Rule-based phishing scoring for URLs and emails.
+
+Each rule contributes points and a human-readable reason. Scores are capped
+at 100 and mapped to a verdict: safe (< 30), suspicious (30-49), phishing (>= 50).
+The same rules are mirrored in extension/scoring.js for offline fallback.
+"""
+
+import ipaddress
+import re
+from urllib.parse import urlparse
+
+SUSPICIOUS_TLDS = {
+    "zip", "mov", "xyz", "top", "click", "country", "gq", "tk", "ml", "cf", "ga",
+    "work", "support", "rest", "fit", "loan", "cam", "icu", "buzz", "monster",
+}
+
+URL_SHORTENERS = {
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd", "buff.ly",
+    "rebrand.ly", "cutt.ly", "shorturl.at", "tiny.cc", "rb.gy",
+}
+
+# Brand keyword -> domains the brand legitimately uses.
+BRANDS = {
+    "paypal": ["paypal.com"],
+    "apple": ["apple.com", "icloud.com"],
+    "microsoft": ["microsoft.com", "live.com", "office.com", "outlook.com"],
+    "google": ["google.com", "gmail.com", "youtube.com"],
+    "amazon": ["amazon.com", "amazon.co.uk", "amazonaws.com"],
+    "netflix": ["netflix.com"],
+    "chase": ["chase.com"],
+    "wellsfargo": ["wellsfargo.com"],
+    "bankofamerica": ["bankofamerica.com"],
+    "facebook": ["facebook.com", "fb.com"],
+    "instagram": ["instagram.com"],
+    "linkedin": ["linkedin.com"],
+    "dropbox": ["dropbox.com"],
+    "docusign": ["docusign.com", "docusign.net"],
+    "coinbase": ["coinbase.com"],
+    "irs": ["irs.gov"],
+    "usps": ["usps.com"],
+    "fedex": ["fedex.com"],
+    "dhl": ["dhl.com"],
+}
+
+PATH_KEYWORDS = {
+    "login", "signin", "sign-in", "verify", "verification", "account", "update",
+    "secure", "banking", "confirm", "password", "wallet", "unlock", "suspend",
+}
+
+URGENCY_PHRASES = [
+    "verify your account", "account suspended", "account has been suspended",
+    "unusual activity", "unusual sign-in", "confirm your identity", "act now",
+    "immediately", "within 24 hours", "within 48 hours", "final notice",
+    "password will expire", "click here to", "update your payment",
+    "your account will be closed", "limited time", "you have won", "gift card",
+    "wire transfer", "urgent",
+]
+
+# Common character swaps used in lookalike domains.
+HOMOGLYPHS = str.maketrans({"0": "o", "1": "l", "3": "e", "5": "s", "@": "a", "$": "s"})
+
+MULTI_PART_SUFFIXES = {"co.uk", "com.au", "co.jp", "com.br", "co.in", "org.uk", "ac.uk"}
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+def registered_domain(host: str) -> str:
+    """Approximate eTLD+1 (e.g. mail.google.com -> google.com)."""
+    if _is_ip(host):
+        return host
+    parts = host.lower().strip(".").split(".")
+    if len(parts) <= 2:
+        return ".".join(parts)
+    if ".".join(parts[-2:]) in MULTI_PART_SUFFIXES:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _levenshtein(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _is_official(reg: str, brand: str) -> bool:
+    return reg in BRANDS[brand]
+
+
+def _mentions_brand(host: str, brand: str) -> bool:
+    """Long brand names match as substrings; short ones (chase, irs) only as whole tokens
+    so that e.g. 'purchase.com' or 'first.com' don't trigger."""
+    tokens = re.split(r"[.\-]", host)
+    if len(brand) >= 6:
+        return any(brand in t for t in tokens) or brand in "".join(tokens)
+    return brand in tokens
+
+
+def verdict_for(score: int) -> str:
+    if score >= 50:
+        return "phishing"
+    if score >= 30:
+        return "suspicious"
+    return "safe"
+
+
+def score_url(url: str, display_text: str = "", sender_domain: str = "") -> dict:
+    """Score a single URL. Returns {url, domain, score, verdict, reasons}."""
+    reasons = []
+    score = 0
+
+    def hit(points, reason):
+        nonlocal score
+        score += points
+        reasons.append(reason)
+
+    parsed = urlparse(url if "://" in url else "http://" + url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return {"url": url, "domain": "", "score": 0, "verdict": "safe", "reasons": []}
+
+    reg = registered_domain(host)
+    reg_label = reg.split(".")[0]
+    tld = host.rsplit(".", 1)[-1]
+
+    if _is_ip(host):
+        hit(35, "Link points to a raw IP address instead of a domain")
+    if "xn--" in host:
+        hit(30, "Domain uses punycode (possible lookalike characters)")
+    if "@" in parsed.netloc:
+        hit(30, "URL contains '@', which hides the real destination")
+    if tld in SUSPICIOUS_TLDS:
+        hit(15, f"Uses a TLD often abused for phishing (.{tld})")
+    if reg in URL_SHORTENERS:
+        hit(15, "Shortened link hides the real destination")
+    if parsed.scheme == "http":
+        hit(10, "Link is not encrypted (http)")
+    if host.count(".") >= 4:
+        hit(15, "Unusually many subdomains")
+    if len(url) > 100:
+        hit(5, "Very long URL")
+    if host.count("-") >= 3:
+        hit(10, "Many hyphens in domain")
+
+    # Brand impersonation: brand name appears in host but domain isn't the brand's.
+    for brand in BRANDS:
+        if _mentions_brand(host, brand) and not _is_official(reg, brand):
+            hit(40, f"Mentions '{brand}' but isn't an official {brand} domain")
+            break
+    else:
+        # Typosquatting: registered label is 1-2 edits from a brand, or matches after homoglyph swap.
+        normalized = reg_label.translate(HOMOGLYPHS)
+        for brand in BRANDS:
+            if _is_official(reg, brand) or len(brand) < 4:
+                continue
+            if normalized == brand or 0 < _levenshtein(reg_label, brand) <= (1 if len(brand) < 6 else 2):
+                hit(40, f"Domain looks like a misspelling of '{brand}'")
+                break
+
+    host_words = sorted(k for k in PATH_KEYWORDS if k in re.split(r"[.\-]", host))
+    if host_words:
+        hit(10, "Sensitive keywords in domain: " + ", ".join(host_words))
+
+    path = (parsed.path + "?" + parsed.query).lower()
+    found = sorted(k for k in PATH_KEYWORDS if k in path)
+    if found:
+        hit(min(5 * len(found), 15), "Sensitive keywords in path: " + ", ".join(found))
+
+    # Anchor text shows one domain but href goes elsewhere.
+    shown = re.search(r"([a-z0-9-]+\.)+[a-z]{2,}", (display_text or "").lower())
+    if shown:
+        shown_reg = registered_domain(shown.group(0))
+        if shown_reg != reg and "." in shown_reg:
+            hit(40, f"Link text shows '{shown_reg}' but goes to '{reg}'")
+
+    if sender_domain and reg != registered_domain(sender_domain):
+        for brand, domains in BRANDS.items():
+            if registered_domain(sender_domain) in domains and _mentions_brand(host, brand):
+                hit(20, "Link claims to be the sender's brand but uses a different domain")
+                break
+
+    score = min(score, 100)
+    return {"url": url, "domain": reg, "score": score, "verdict": verdict_for(score), "reasons": reasons}
+
+
+def score_email(links: list, sender: str = "", subject: str = "", body_text: str = "") -> dict:
+    """Score an email from its links and text.
+
+    links: [{"href": str, "text": str}]
+    """
+    sender_domain = sender.split("@")[-1].lower() if "@" in sender else ""
+    seen = set()
+    link_results = []
+    for link in links:
+        href = (link.get("href") or "").strip()
+        if not href.lower().startswith(("http://", "https://")) or href in seen:
+            continue
+        seen.add(href)
+        link_results.append(score_url(href, link.get("text", ""), sender_domain))
+
+    reasons = []
+    text = f"{subject}\n{body_text}".lower()
+    urgency = [p for p in URGENCY_PHRASES if p in text]
+    content_score = min(10 * len(urgency), 30)
+    if urgency:
+        reasons.append("Urgent/pressure language: " + ", ".join(f'"{p}"' for p in urgency[:4]))
+
+    if sender_domain:
+        for brand in BRANDS:
+            if _mentions_brand(sender_domain, brand) and not _is_official(
+                registered_domain(sender_domain), brand
+            ):
+                content_score += 30
+                reasons.append(f"Sender domain impersonates '{brand}'")
+                break
+
+    worst = max((r["score"] for r in link_results), default=0)
+    flagged = sum(1 for r in link_results if r["verdict"] != "safe")
+    # Worst link dominates; content and multiple bad links add on top.
+    score = min(worst + content_score + max(flagged - 1, 0) * 5, 100)
+
+    return {
+        "score": score,
+        "verdict": verdict_for(score),
+        "reasons": reasons,
+        "links": link_results,
+        "sender_domain": sender_domain,
+    }

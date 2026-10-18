@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font: 13px/1.4 system-ui, sans-serif; width: 300px; margin: 0; padding: 14px; color: #202124; }
+    h1 { font-size: 16px; margin: 0 0 10px; }
+    .stats { display: flex; gap: 8px; margin-bottom: 14px; }
+    .stat { flex: 1; text-align: center; background: #f1f3f4; border-radius: 6px; padding: 6px 0; }
+    .stat b { display: block; font-size: 18px; }
+    label { display: block; margin: 8px 0 3px; font-weight: 600; }
+    input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid #dadce0; border-radius: 4px; }
+    .row { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+    button { margin-top: 12px; padding: 6px 12px; border: 0; border-radius: 4px; background: #1a73e8; color: #fff; cursor: pointer; }
+    #status { margin-left: 8px; font-size: 12px; color: #5f6368; }
+    .hint { font-size: 11px; color: #5f6368; }
+  </style>
+</head>
+<body>
+  <h1>PhishGuard</h1>
+  <div class="stats">
+    <div class="stat"><b id="scanned">0</b>Scanned</div>
+    <div class="stat"><b id="suspicious">0</b>Suspicious</div>
+    <div class="stat"><b id="phishing">0</b>Phishing</div>
+  </div>
+  <div class="row"><input type="checkbox" id="enabled" /><span>Scan emails in Gmail</span></div>
+  <label for="apiUrl">API URL</label>
+  <input type="text" id="apiUrl" placeholder="https://xxxx.execute-api.us-east-1.amazonaws.com" />
+  <div class="hint">Leave empty to score locally only.</div>
+  <label for="apiKey">API key (optional)</label>
+  <input type="password" id="apiKey" />
+  <button id="save">Save</button><span id="status"></span>
+  <script src="popup.js"></script>
+</body>
+</html>

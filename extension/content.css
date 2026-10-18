@@ -1,0 +1,29 @@
+.pg-banner {
+  font: 13px/1.4 "Google Sans", Roboto, Arial, sans-serif;
+  border-radius: 8px;
+  border-left: 4px solid;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+}
+.pg-safe { background: #e6f4ea; border-color: #1e8e3e; color: #0d652d; }
+.pg-suspicious { background: #fef7e0; border-color: #f9ab00; color: #7a4f01; }
+.pg-phishing { background: #fce8e6; border-color: #d93025; color: #8c1d18; }
+.pg-header { display: flex; justify-content: space-between; gap: 12px; }
+.pg-score { font-weight: 600; white-space: nowrap; }
+.pg-reasons { margin: 6px 0 0; padding-left: 18px; }
+.pg-reasons li { margin: 2px 0; word-break: break-word; }
+.pg-source { margin-top: 6px; font-size: 11px; opacity: 0.7; }
+.pg-feedback {
+  margin-top: 8px;
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.pg-feedback:disabled { opacity: 0.6; cursor: default; }
+.pg-link-suspicious { outline: 2px solid #f9ab00; outline-offset: 1px; border-radius: 2px; }
+.pg-link-phishing { outline: 2px solid #d93025; outline-offset: 1px; border-radius: 2px; background: #fce8e6; }

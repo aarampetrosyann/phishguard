@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- Local demo: mimics Gmail's DOM and stubs the chrome.* APIs so content.js
+     can be tested without loading the extension. Open via a local server:
+     python3 -m http.server 8000  ->  http://localhost:8000/tools/demo.html -->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>PhishGuard demo</title>
+  <link rel="stylesheet" href="../extension/content.css" />
+  <style>
+    body { font: 14px Arial, sans-serif; max-width: 760px; margin: 24px auto; color: #202124; }
+    .adn { border: 1px solid #dadce0; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .meta { color: #5f6368; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h2 class="hP">Demo inbox</h2>
+
+  <div class="adn">
+    <div class="meta">From: <span class="gD" email="service@paypal-support.net">PayPal</span></div>
+    <div class="a3s">
+      <p>Urgent: We noticed unusual activity on your account. Verify your account within 24 hours or it will be closed.</p>
+      <p><a href="https://paypal-secure-login.com/account/verify">https://www.paypal.com/account</a></p>
+      <p><a href="http://192.168.4.20/login">Sign in here</a></p>
+    </div>
+  </div>
+
+  <div class="adn">
+    <div class="meta">From: <span class="gD" email="notifications@github.com">GitHub</span></div>
+    <div class="a3s">
+      <p>A new issue was opened on your repository.</p>
+      <p><a href="https://github.com/notifications">View it on GitHub</a></p>
+    </div>
+  </div>
+
+  <script src="../extension/scoring.js"></script>
+  <script>
+    const store = { enabled: true };
+    window.chrome = {
+      storage: { sync: { get: (d, cb) => cb({ ...d, ...store }) } },
+      runtime: {
+        sendMessage: async (msg) =>
+          msg.type === "scan"
+            ? { ...PhishGuardScoring.scoreEmail(msg.email), source: "local", scan_id: "demo" }
+            : { ok: true },
+      },
+    };
+  </script>
+  <script src="../extension/content.js"></script>
+</body>
+</html>

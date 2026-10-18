@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PhishGuard - serverless phishing scoring API (Lambda + API Gateway + S3 logs)
+
+Parameters:
+  ApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Optional shared key the extension sends as x-api-key. Leave empty to disable.
+
+Resources:
+  LogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+
+  PhishGuardApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [content-type, x-api-key]
+
+  ScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 5
+      Environment:
+        Variables:
+          LOG_BUCKET: !Ref LogBucket
+          API_KEY: !Ref ApiKey
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref LogBucket
+      Events:
+        Score:
+          Type: HttpApi
+          Properties: { ApiId: !Ref PhishGuardApi, Path: /score, Method: POST }
+        Feedback:
+          Type: HttpApi
+          Properties: { ApiId: !Ref PhishGuardApi, Path: /feedback, Method: POST }
+        Health:
+          Type: HttpApi
+          Properties: { ApiId: !Ref PhishGuardApi, Path: /health, Method: GET }
+
+Outputs:
+  ApiUrl:
+    Description: Paste this into the extension's settings
+    Value: !Sub "https://${PhishGuardApi}.execute-api.${AWS::Region}.amazonaws.com"
+  LogBucketName:
+    Value: !Ref LogBucket

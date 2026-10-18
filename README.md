@@ -1,0 +1,116 @@
+# PhishGuard
+
+A Chrome extension that flags phishing emails in Gmail. It reads the opened email
+from the Gmail DOM, pulls out the sender, subject, body text and every link, and
+scores them with a set of rules. The scoring runs on AWS Lambda behind API Gateway,
+and every scan is logged to S3 so you can measure accuracy and debug false
+positives. If the API can't be reached, the extension falls back to scoring locally.
+
+```
+Gmail tab ──content.js──▶ background.js ──POST /score──▶ API Gateway ─▶ Lambda (app.py)
+   ▲  banner + link highlights      │ (fallback: scoring.js)              │
+   └────────────────────────────────┘                                     ▼
+                                                                S3: scans/, feedback/
+```
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `extension/manifest.json` | Chrome MV3 manifest |
+| `extension/content.js` | Watches Gmail for opened emails, extracts data from the DOM, renders the banner, highlights risky links |
+| `extension/background.js` | Service worker: calls the API (4s timeout), falls back to local scoring, tracks stats |
+| `extension/scoring.js` | JS port of the scoring rules (offline fallback) |
+| `extension/popup.*` | Settings (API URL/key, on/off) and scan stats |
+| `backend/src/scoring.py` | The rule-based scoring engine |
+| `backend/src/app.py` | Lambda handler: `POST /score`, `POST /feedback`, `GET /health`, S3 logging |
+| `backend/template.yaml` | AWS SAM template: Lambda + HTTP API + private S3 bucket (90-day log expiry) |
+| `backend/tests/` | pytest suite and shared URL test cases |
+| `tools/parity_test.js` | Checks that the JS and Python scorers return identical scores |
+| `tools/demo.html` | Mock Gmail page for testing the content script without installing the extension |
+
+## Scoring rules
+
+Each URL gets points for each rule it trips (capped at 100):
+
+| Signal | Points |
+|---|---|
+| Domain is a typo of a known brand (`paypa1.com`, `micros0ft.com`) | 40 |
+| Brand name in the domain, but not the brand's real domain (`paypal-secure-login.com`) | 40 |
+| Link text shows one domain, href goes to another | 40 |
+| Raw IP address | 35 |
+| Punycode (`xn--`) lookalike characters | 30 |
+| `@` in the URL (`https://google.com@evil.com`) | 30 |
+| Link uses the sender's brand name but a different domain | 20 |
+| Abused TLD (`.xyz`, `.top`, `.zip`…), URL shortener, 4+ subdomains | 15 each |
+| Plain `http`, 3+ hyphens, sensitive words in the domain | 10 each |
+| Sensitive words in the path (`login`, `verify`, `account`…) | 5 each, max 15 |
+| URL over 100 characters | 5 |
+
+The email score = the worst link's score + urgency phrases ("verify your account",
+"within 24 hours"…, 10 each, max 30) + 30 if the sender's domain impersonates a brand
++ 5 for each extra flagged link.
+
+**Verdicts:** `safe` < 30 ≤ `suspicious` < 50 ≤ `phishing`
+
+## Run the tests
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pytest
+```
+
+```bash
+.venv/bin/python -m pytest -q backend/tests
+```
+
+```bash
+node tools/parity_test.js
+```
+
+## Try it without Gmail
+
+```bash
+python3 -m http.server 8765
+```
+
+Then open http://localhost:8765/tools/demo.html.
+
+## Deploy the backend
+
+You need the [AWS CLI](https://aws.amazon.com/cli/) (configured with `aws configure`)
+and the [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html).
+
+```bash
+cd backend && sam build && sam deploy --guided
+```
+
+When `--guided` asks for `ApiKey`, you can set a shared secret or leave it empty. The
+`ApiUrl` output is the URL you paste into the extension.
+
+Check it:
+
+```bash
+curl -s -X POST "$API_URL/score" -H 'content-type: application/json' -d '{"sender":"a@paypal-help.net","subject":"Urgent","links":[{"href":"http://10.0.0.1/login","text":"Sign in"}]}'
+```
+
+### Logs in S3
+
+- `scans/YYYY/MM/DD/<scan_id>.json`: verdict, score, reasons and per-link results.
+  The email body is **not** stored.
+- `feedback/YYYY/MM/DD/<id>.json`: "report false positive" clicks from the banner,
+  linked by `scan_id`.
+
+To find false positives, join the feedback records to scans by `scan_id`. You can do
+this with Athena, or by downloading a day's logs with `aws s3 sync`.
+
+## Install the extension
+
+1. Go to `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and select the `extension/` folder.
+3. Open the PhishGuard popup, paste your API URL (and key, if you set one), then click **Save**.
+   Leave the URL empty to score locally only.
+4. Open an email in Gmail. A banner appears above the message, and risky links get a
+   red or yellow outline. Hover over a link to see why it was flagged.
+
+> Gmail's class names (`div.a3s`, `span.gD`, `h2.hP`, `div.adn`) are obfuscated, but they
+> have stayed the same for years. If Gmail changes them, update `SEL` in `content.js`.
