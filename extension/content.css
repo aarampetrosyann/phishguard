@@ -35,3 +35,4 @@
 .pg-feedback:disabled { opacity: 0.6; cursor: default; }
 .pg-link-suspicious { outline: 2px solid #f9ab00; outline-offset: 1px; border-radius: 2px; }
 .pg-link-phishing { outline: 2px solid #d93025; outline-offset: 1px; border-radius: 2px; background: #fce8e6; }
+.pg-compact { padding: 4px 12px; font-size: 12px; font-weight: 500; }

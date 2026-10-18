@@ -1,15 +1,21 @@
 // Service worker: forwards scan requests to the Lambda API (content scripts
-// can't make cross-origin requests to it directly) and keeps simple stats.
+// can't make cross-origin requests to it directly), toggles the in-Gmail panel
+// from the toolbar icon, and shows the current email's verdict as a badge.
 importScripts("scoring.js");
 
-// Settings sync across the user's browsers; stats stay local (frequent writes).
-const DEFAULTS = { apiUrl: "", apiKey: "", enabled: true };
-const STATS_DEFAULT = { stats: { scanned: 0, suspicious: 0, phishing: 0 } };
+const DEFAULTS = { apiUrl: "", apiKey: "" };
 const TIMEOUT_MS = 4000;
+const CONTENT_FILES = ["scoring.js", "panel.js", "content.js"];
+const BADGES = {
+  phishing: { text: "!", color: "#d93025" },
+  suspicious: { text: "?", color: "#e37400" },
+};
 
 async function getSettings() {
   return chrome.storage.sync.get(DEFAULTS);
 }
+
+const apiBase = (url) => url.replace(/\/$/, "");
 
 async function postJson(url, body, apiKey) {
   const ctrl = new AbortController();
@@ -30,44 +36,75 @@ async function postJson(url, body, apiKey) {
 
 async function scan(email) {
   const { apiUrl, apiKey } = await getSettings();
-  let result;
-  let source = "local";
   if (apiUrl) {
     try {
-      result = await postJson(`${apiUrl.replace(/\/$/, "")}/score`, {
+      const result = await postJson(`${apiBase(apiUrl)}/score`, {
         sender: email.sender,
         subject: email.subject,
         body_text: email.bodyText,
         links: email.links,
       }, apiKey);
-      source = "api";
+      return { ...result, source: "api" };
     } catch (err) {
       console.warn("PhishGuard API failed, using local scoring:", err.message);
     }
   }
-  if (!result) result = self.PhishGuardScoring.scoreEmail(email);
-  result.source = source;
-
-  const { stats } = await chrome.storage.local.get(STATS_DEFAULT);
-  stats.scanned += 1;
-  if (result.verdict === "suspicious") stats.suspicious += 1;
-  if (result.verdict === "phishing") stats.phishing += 1;
-  await chrome.storage.local.set({ stats });
-  return result;
+  return { ...self.PhishGuardScoring.scoreEmail(email), source: "local" };
 }
 
 async function feedback(payload) {
   const { apiUrl, apiKey } = await getSettings();
   if (!apiUrl) return { ok: false, error: "No API configured" };
-  return postJson(`${apiUrl.replace(/\/$/, "")}/feedback`, payload, apiKey);
+  return postJson(`${apiBase(apiUrl)}/feedback`, payload, apiKey);
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  const handlers = { scan: () => scan(msg.email), feedback: () => feedback(msg.payload) };
+async function health() {
+  const { apiUrl } = await getSettings();
+  if (!apiUrl) return { ok: false, mode: "local" };
+  try {
+    const res = await fetch(`${apiBase(apiUrl)}/health`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    return { ok: res.ok, mode: "api", status: res.status };
+  } catch (err) {
+    return { ok: false, mode: "api", error: err.message };
+  }
+}
+
+function setBadge(tabId, verdict) {
+  const badge = BADGES[verdict];
+  chrome.action.setBadgeText({ tabId, text: badge ? badge.text : "" });
+  if (badge) chrome.action.setBadgeBackgroundColor({ tabId, color: badge.color });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "badge") {
+    if (sender.tab) setBadge(sender.tab.id, msg.verdict);
+    return false;
+  }
+  const handlers = {
+    scan: () => scan(msg.email),
+    feedback: () => feedback(msg.payload),
+    health: () => health(),
+  };
   const handler = handlers[msg.type];
   if (!handler) return false;
   handler()
     .then(sendResponse)
     .catch((err) => sendResponse({ error: err.message }));
   return true; // async response
+});
+
+// Toolbar icon: open/close the panel inside Gmail. Tabs opened before the extension
+// was installed or reloaded have no content script yet, so inject it on demand.
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab.url?.startsWith("https://mail.google.com/")) {
+    chrome.tabs.create({ url: "https://mail.google.com/" });
+    return;
+  }
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: "togglePanel" });
+  } catch {
+    await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["content.css"] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_FILES });
+    await chrome.tabs.sendMessage(tab.id, { type: "togglePanel" });
+  }
 });

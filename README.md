@@ -19,9 +19,9 @@ Gmail tab ──content.js──▶ background.js ──POST /score──▶ API
 |---|---|
 | `extension/manifest.json` | Chrome MV3 manifest |
 | `extension/content.js` | Watches Gmail for opened emails, extracts data from the DOM, renders the banner, highlights risky links |
-| `extension/background.js` | Service worker: calls the API (4s timeout), falls back to local scoring, tracks stats |
+| `extension/background.js` | Service worker: calls the API (4s timeout), falls back to local scoring, opens the panel from the toolbar icon, sets the toolbar badge |
 | `extension/scoring.js` | JS port of the scoring rules (offline fallback) |
-| `extension/popup.*` | Settings (API URL/key, on/off) and scan stats |
+| `extension/panel.js` | Floating panel inside Gmail (top-right): risk score bar for the open email, plus expandable settings, activity, trusted senders and API config |
 | `backend/src/scoring.py` | The rule-based scoring engine |
 | `backend/src/app.py` | Lambda handler: `POST /score`, `POST /feedback`, `GET /health`, S3 logging |
 | `backend/template.yaml` | AWS SAM template: Lambda + HTTP API + private S3 bucket (90-day log expiry) |
@@ -122,10 +122,12 @@ this with Athena, or by downloading a day's logs with `aws s3 sync`.
 
 1. Go to `chrome://extensions` and turn on **Developer mode**.
 2. Click **Load unpacked** and select the `extension/` folder.
-3. Open the PhishGuard popup, paste your API URL (and key, if you set one), then click **Save**.
-   Leave the URL empty to score locally only.
-4. Open an email in Gmail. A banner appears above the message, and risky links get a
-   red or yellow outline. Hover over a link to see why it was flagged.
+3. Open Gmail and click the PhishGuard toolbar icon. A panel opens in the top-right of Gmail
+   showing the open email's risk score. Click **Settings & activity** to expand it: you can
+   pause scanning, switch safe emails to a compact banner, manage trusted senders, see recent
+   scans, or paste your API URL (and key) and click **Save**. Leave the URL empty to score locally only.
+4. Open an email. A banner appears above the message, risky links get a red or yellow
+   outline (hover to see why), and the toolbar icon shows a red `!` or amber `?` badge.
 
 > Gmail's class names (`div.a3s`, `span.gD`, `h2.hP`, `div.adn`) are obfuscated, but they
 > have stayed the same for years. If Gmail changes them, update `SEL` in `content.js`.

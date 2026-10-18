@@ -1,7 +1,8 @@
 <!doctype html>
-<!-- Local demo: mimics Gmail's DOM and stubs the chrome.* APIs so content.js
-     can be tested without loading the extension. Open via a local server:
-     python3 -m http.server 8000  ->  http://localhost:8000/tools/demo.html -->
+<!-- Local demo: mimics Gmail's DOM and stubs the chrome.* APIs so content.js and
+     panel.js can be tested without loading the extension. Open via a local server:
+     python3 -m http.server 8000  ->  http://localhost:8000/tools/demo.html
+     The button top-right stands in for the toolbar icon. -->
 <html>
 <head>
   <meta charset="utf-8" />
@@ -11,9 +12,11 @@
     body { font: 14px Arial, sans-serif; max-width: 760px; margin: 24px auto; color: #202124; }
     .adn { border: 1px solid #dadce0; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
     .meta { color: #5f6368; margin-bottom: 12px; }
+    #toolbar { position: fixed; top: 16px; right: 16px; padding: 8px 14px; border-radius: 18px; border: 1px solid #dadce0; background: #fff; cursor: pointer; }
   </style>
 </head>
 <body>
+  <button id="toolbar">🛡 Toolbar icon</button>
   <h2 class="hP">Demo inbox</h2>
 
   <div class="adn">
@@ -43,24 +46,43 @@
 
   <script src="../extension/scoring.js"></script>
   <script>
-    const store = { enabled: true };
-    window.chrome = {
-      // Mimics chrome.storage.sync: callback style and promise style.
-      storage: {
-        sync: {
-          get: (d, cb) => { const v = { ...d, ...store }; return cb ? cb(v) : Promise.resolve(v); },
-          set: async (v) => Object.assign(store, v),
+    // Minimal stand-in for chrome.storage / chrome.runtime.
+    const listeners = [];
+    function area(name, store) {
+      return {
+        get: (defaults, cb) => {
+          const value = structuredClone({ ...defaults, ...store });
+          return cb ? cb(value) : Promise.resolve(value);
         },
+        set: async (values) => {
+          const changes = {};
+          for (const [k, v] of Object.entries(values)) changes[k] = { oldValue: store[k], newValue: structuredClone(v) };
+          Object.assign(store, structuredClone(values));
+          listeners.forEach((fn) => fn(changes, name));
+        },
+      };
+    }
+    let onMessage;
+    window.chrome = {
+      storage: {
+        sync: area("sync", { enabled: true }),
+        local: area("local", {}),
+        onChanged: { addListener: (fn) => listeners.push(fn) },
       },
       runtime: {
         id: "demo",
-        sendMessage: async (msg) =>
-          msg.type === "scan"
-            ? { ...PhishGuardScoring.scoreEmail(msg.email), source: "local", scan_id: "demo" }
-            : { ok: true },
+        getManifest: () => ({ version: "demo" }),
+        onMessage: { addListener: (fn) => (onMessage = fn) },
+        sendMessage: async (msg) => {
+          if (msg.type === "scan") return { ...PhishGuardScoring.scoreEmail(msg.email), source: "local", scan_id: "demo" };
+          if (msg.type === "health") return { ok: false, mode: "local" };
+          return { ok: true };
+        },
       },
     };
+    document.getElementById("toolbar").onclick = () => onMessage({ type: "togglePanel" }, {}, () => {});
   </script>
+  <script src="../extension/panel.js"></script>
   <script src="../extension/content.js"></script>
 </body>
 </html>
