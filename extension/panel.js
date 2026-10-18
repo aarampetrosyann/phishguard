@@ -37,24 +37,18 @@
     return node;
   }
 
-  function shieldIcon(size = 20) {
+  // Logo from logo.js (generated from assets/logo.svg by tools/build_icons.py).
+  function logoIcon(size = 34) {
     const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("width", size);
-    svg.setAttribute("height", size);
-    svg.setAttribute("aria-hidden", "true");
-    const shield = document.createElementNS(ns, "path");
-    shield.setAttribute("d", "M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z");
-    shield.setAttribute("fill", "#1a73e8");
-    const check = document.createElementNS(ns, "path");
-    check.setAttribute("d", "m8.5 12 2.5 2.5 4.5-5");
-    check.setAttribute("fill", "none");
-    check.setAttribute("stroke", "#fff");
-    check.setAttribute("stroke-width", "2");
-    check.setAttribute("stroke-linecap", "round");
-    check.setAttribute("stroke-linejoin", "round");
-    svg.append(shield, check);
+    const build = ([tag, attrs, children]) => {
+      const node = document.createElementNS(ns, tag);
+      for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+      children.forEach((child) => node.append(build(child)));
+      return node;
+    };
+    const logo = self.PhishGuardLogo;
+    const svg = build(["svg", { ...logo.attrs, width: size, height: size, "aria-hidden": "true" }, logo.children]);
+    svg.classList.add("logo");
     return svg;
   }
 
@@ -253,7 +247,7 @@
 
     panel = h("div", { class: "panel", role: "dialog", "aria-label": "PhishGuard" },
       h("header", {},
-        shieldIcon(),
+        logoIcon(),
         h("span", { class: "title" }, "PhishGuard"),
         modeChip,
         h("button", { class: "icon-btn close", title: "Close", "aria-label": "Close PhishGuard", onclick: () => setOpen(false) }, "✕")),
@@ -318,7 +312,8 @@
     }
     .panel.open { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition: opacity .15s ease, transform .15s ease; }
     * { box-sizing: border-box; }
-    header { display: flex; align-items: center; gap: 8px; padding: 14px 12px 6px 16px; }
+    header { display: flex; align-items: center; gap: 4px; padding: 8px 12px 4px 8px; }
+    .logo { flex: none; }
     .title { font-size: 16px; font-weight: 500; flex: 1; }
     .mode { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #f1f3f4; color: #5f6368; }
     .mode-api { background: #e8f0fe; color: #1967d2; }

@@ -5,7 +5,7 @@ importScripts("scoring.js");
 
 const DEFAULTS = { apiUrl: "", apiKey: "" };
 const TIMEOUT_MS = 4000;
-const CONTENT_FILES = ["scoring.js", "panel.js", "content.js"];
+const CONTENT_FILES = ["scoring.js", "logo.js", "panel.js", "content.js"];
 const BADGES = {
   phishing: { text: "!", color: "#d93025" },
   suspicious: { text: "?", color: "#e37400" },

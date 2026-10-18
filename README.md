@@ -26,6 +26,8 @@ Gmail tab ──content.js──▶ background.js ──POST /score──▶ API
 | `backend/src/app.py` | Lambda handler: `POST /score`, `POST /feedback`, `GET /health`, S3 logging |
 | `backend/template.yaml` | AWS SAM template: Lambda + HTTP API + private S3 bucket (90-day log expiry) |
 | `backend/tests/` | pytest suite and shared URL test cases |
+| `assets/logo.svg`, `assets/logo-small.svg` | Logo sources: full logo (48/128px icons, panel header) and shield-only version for 16/32px. `logo-source.svg` is the original design |
+| `tools/build_icons.py` | Renders the PNG icons and `extension/logo.js` from the SVGs (needs Google Chrome; run after changing a logo) |
 | `tools/parity_test.js` | Checks that the JS and Python scorers return identical scores |
 | `tools/demo.html` | Mock Gmail page for testing the content script without installing the extension |
 
