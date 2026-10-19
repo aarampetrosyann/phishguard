@@ -7,7 +7,9 @@ PNGs are rendered with headless Google Chrome at 512px, then downscaled with mac
 for clean anti-aliasing. The panel can't load image files inside Gmail (page CSP), so the
 full logo is also converted to extension/logo.js, which panel.js builds with DOM calls.
 
-Usage: python3 tools/build_icons.py
+Usage: python3 tools/build_icons.py              # all sizes
+       python3 tools/build_icons.py 48 128       # only these sizes (the panel logo is rebuilt
+                                                 # whenever 48 or 128 is included)
 """
 
 import json
@@ -65,16 +67,22 @@ def write_logo_js(svg: Path) -> None:
 def main() -> None:
     if not Path(CHROME).exists():
         sys.exit(f"Google Chrome not found at {CHROME}")
+    sizes = [int(a) for a in sys.argv[1:]] or list(SIZES)
+    unknown = set(sizes) - set(SIZES)
+    if unknown:
+        sys.exit(f"Unknown size(s) {sorted(unknown)}; choose from {list(SIZES)}")
     with tempfile.TemporaryDirectory() as tmp:
-        for name in sorted(set(SIZES.values())):
+        for name in sorted({SIZES[s] for s in sizes}):
             render_png(ASSETS / name, Path(tmp) / f"{name}.png")
-        for size, name in SIZES.items():
+        for size in sizes:
+            name = SIZES[size]
             out = ICONS / f"icon{size}.png"
             shutil.copy(Path(tmp) / f"{name}.png", out)
             subprocess.run(["sips", "-z", str(size), str(size), str(out)], check=True, capture_output=True)
             print(f"wrote {out.relative_to(ROOT)} from {name}")
-    write_logo_js(ASSETS / "logo.svg")
-    print("wrote extension/logo.js")
+    if "logo.svg" in {SIZES[s] for s in sizes}:
+        write_logo_js(ASSETS / "logo.svg")
+        print("wrote extension/logo.js")
 
 
 if __name__ == "__main__":
