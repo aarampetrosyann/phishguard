@@ -6,6 +6,11 @@ scores them with a set of rules. The scoring runs on AWS Lambda behind API Gatew
 and every scan is logged to S3 so you can measure accuracy and debug false
 positives. If the API can't be reached, the extension falls back to scoring locally.
 
+![PhishGuard in Gmail: a compact "no phishing signals" banner above the email, and the PhishGuard panel in the top-right showing a risk score of 5/100 on the safe end of the score bar](docs/screenshot.webp)
+
+*A safe email from a university club scoring 5/100. The banner sits above the message, and
+the toolbar icon opens the panel in the top-right with the score bar, sender and reasons.*
+
 ```
 Gmail tab ──content.js──▶ background.js ──POST /score──▶ API Gateway ─▶ Lambda (app.py)
    ▲  banner + link highlights      │ (fallback: scoring.js)              │
